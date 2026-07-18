@@ -4,12 +4,12 @@ import { getFirestore } from 'firebase/firestore';
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyA2P-CvUb8-I-TcKZZqTuSXT7acv0VikfY",
-  authDomain: "bookforge75.firebaseapp.com",
-  projectId: "bookforge75",
-  storageBucket: "bookforge75.firebasestorage.app",
-  messagingSenderId: "968937463207",
-  appId: "1:968937463207:web:c66286da46a8b7036d2a82"
+  apiKey: ((import.meta as any).env?.VITE_FIREBASE_API_KEY as string) || "AIzaSyAP6t5SW7pIAgEQ2dlKh67nee6khUxKaXk",
+  authDomain: ((import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN as string) || "tradingbotmanager75.firebaseapp.com",
+  projectId: ((import.meta as any).env?.VITE_FIREBASE_PROJECT_ID as string) || "tradingbotmanager75",
+  storageBucket: ((import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET as string) || "tradingbotmanager75.firebasestorage.app",
+  messagingSenderId: ((import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID as string) || "327545877828",
+  appId: ((import.meta as any).env?.VITE_FIREBASE_APP_ID as string) || "1:327545877828:web:8bd3256427f412977a1311"
 };
 
 // Initialize Firebase
