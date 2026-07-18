@@ -1,0 +1,6 @@
+{
+  "name": "Trading Bot Manager",
+  "description": "Beheer en monitor meerdere eToro trading bots, aangedreven door TradingView webhook-signalen en eToro Agent Portfolios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
