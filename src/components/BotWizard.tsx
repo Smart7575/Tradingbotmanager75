@@ -18,6 +18,21 @@ export default function BotWizard({ strategies, onBotCreated, onCancel }: BotWiz
   const [botName, setBotName] = useState('');
   const [selectedStrategyId, setSelectedStrategyId] = useState(strategies[0]?.id || 'strat-1');
   const [broker, setBroker] = useState('eToro'); // fixed in v1
+  const [apiKey, setApiKey] = useState('');
+  const [userKey, setUserKey] = useState('');
+
+  // Load existing eToro settings on mount
+  useEffect(() => {
+    apiFetch('/api/settings')
+      .then(r => r.json())
+      .then(data => {
+        if (data) {
+          setApiKey(data.apiKey || '');
+          setUserKey(data.userKey || '');
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Step 2
   const [searchQuery, setSearchQuery] = useState('');
@@ -123,8 +138,20 @@ export default function BotWizard({ strategies, onBotCreated, onCancel }: BotWiz
     return true;
   };
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (validateStep(step)) {
+      if (step === 1) {
+        // Save the updated broker credentials to the database settings
+        try {
+          await apiFetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ eToroCoupled: true, apiKey, userKey })
+          });
+        } catch (e) {
+          console.error('Fout bij opslaan broker credentials:', e);
+        }
+      }
       setStep(prev => prev + 1);
     }
   };
@@ -273,15 +300,39 @@ export default function BotWizard({ strategies, onBotCreated, onCancel }: BotWiz
                 </div>
 
                 {/* Broker Selection (Locked to eToro) */}
-                <div className="space-y-2">
-                  <label className="text-xs font-mono text-slate-400 uppercase tracking-wider block">Broker Account</label>
-                  <div className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-sm font-sans flex items-center justify-between text-slate-500">
-                    <span>eToro Broker Link</span>
+                <div className="space-y-4">
+                  <label className="text-xs font-mono text-slate-400 uppercase tracking-wider block">Broker Account & Credentials</label>
+                  <div className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-sm font-sans flex items-center justify-between text-slate-300">
+                    <span className="font-semibold text-cyan-400">eToro API Integratie</span>
                     <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-bold">
-                      VAST (V1)
+                      ACTIEF (V1)
                     </span>
                   </div>
-                  <p className="text-[10px] text-slate-500 font-mono">Gekoppeld met uw eToro developer credentials.</p>
+
+                  {/* Input fields for credentials */}
+                  <div className="space-y-3 bg-slate-950/40 p-4 border border-slate-800 rounded-lg">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">eToro API-Key (x-api-key)</label>
+                      <input
+                        type="password"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder="Voer uw eToro API-key in..."
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-cyan-500 text-slate-200"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block">eToro User-Key (x-user-key)</label>
+                      <input
+                        type="text"
+                        value={userKey}
+                        onChange={(e) => setUserKey(e.target.value)}
+                        placeholder="usr_stefan_trader_99"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:border-cyan-500 text-slate-200"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-slate-500 font-mono">Deze credentials worden automatisch gekoppeld aan de nieuwe bot en opgeslagen in uw instellingen.</p>
                 </div>
 
               </div>

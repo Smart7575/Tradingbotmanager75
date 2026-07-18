@@ -43,17 +43,110 @@ let instruments: EToroInstrument[] = [
 ];
 
 
-// Fluctuate prices slightly to simulate dynamic market activity
+// Helper function to fetch real-time instrument details from public financial APIs
+async function fetchInstrumentDetails(symbol: string): Promise<{ symbol: string; name: string; type: 'crypto' | 'stock' | 'forex'; price: number } | null> {
+  const query = symbol.trim().toUpperCase();
+  if (!query) return null;
+
+  const isCrypto = query.endsWith('USD') || ['BTC', 'ETH', 'SOL', 'ADA', 'XRP', 'DOGE', 'LINK', 'DOT', 'UNI', 'AVAX', 'MATIC'].includes(query);
+  const isForex = query.length === 6 && !query.includes('USD') && !isCrypto;
+  const type: 'crypto' | 'stock' | 'forex' = isCrypto ? 'crypto' : (isForex ? 'forex' : 'stock');
+
+  try {
+    if (type === 'crypto') {
+      let coinbaseSymbol = query;
+      if (query.endsWith('USD') && query.length > 3) {
+        coinbaseSymbol = query.slice(0, -3) + '-USD';
+      }
+      const res = await fetch(`https://api.exchange.coinbase.com/products/${coinbaseSymbol}/ticker`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        if (data && data.price) {
+          const price = parseFloat(parseFloat(data.price).toFixed(2));
+          const baseName = query.endsWith('USD') ? query.slice(0, -3) : query;
+          return {
+            symbol: query,
+            name: `${baseName} / USD (Crypto)`,
+            type: 'crypto',
+            price
+          };
+        }
+      }
+    } else if (type === 'stock') {
+      const res = await fetch(`https://api.nasdaq.com/api/quote/${query}/info?assetclass=stocks`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+        }
+      });
+      if (res.ok) {
+        const data: any = await res.json();
+        const lastSale = data?.data?.primaryData?.lastSalePrice;
+        if (lastSale) {
+          const priceStr = lastSale.replace('$', '').trim();
+          const price = parseFloat(parseFloat(priceStr).toFixed(2));
+          const name = data?.data?.companyName || `${query} Stock`;
+          return {
+            symbol: query,
+            name,
+            type: 'stock',
+            price
+          };
+        }
+      }
+    } else if (type === 'forex') {
+      const res = await fetch('https://open.er-api.com/v6/latest/USD');
+      if (res.ok) {
+        const data: any = await res.json();
+        if (data && data.rates) {
+          const rates = data.rates;
+          const ccy1 = query.slice(0, 3);
+          const ccy2 = query.slice(3, 6);
+          if (rates[ccy1] && rates[ccy2]) {
+            const rate = rates[ccy2] / rates[ccy1];
+            const price = parseFloat(rate.toFixed(4));
+            return {
+              symbol: query,
+              name: `${ccy1} / ${ccy2} (Forex)`,
+              type: 'forex',
+              price
+            };
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`Error fetching real price for ${symbol}:`, err);
+  }
+  return null;
+}
+
+// Periodically update existing catalogue prices from live APIs
+async function updateCatalogPrices() {
+  console.log('[Catalog] Updating real-time catalog prices from live APIs...');
+  for (const inst of instruments) {
+    try {
+      const details = await fetchInstrumentDetails(inst.symbol);
+      if (details) {
+        inst.price = details.price;
+        if (details.name && !inst.name.includes('Stock')) {
+          inst.name = details.name;
+        }
+      }
+    } catch (e) {
+      console.error(`Error updating catalog item ${inst.symbol}:`, e);
+    }
+  }
+}
+
+// Initial update
+updateCatalogPrices().catch(err => console.error('Error in initial catalog update:', err));
+
+// Update every 30 seconds
 setInterval(() => {
-  instruments = instruments.map(inst => {
-    const changePct = (Math.random() - 0.5) * 0.002; // max 0.1% change
-    const newPrice = inst.price * (1 + changePct);
-    return {
-      ...inst,
-      price: parseFloat(newPrice.toFixed(inst.type === 'forex' ? 4 : 2))
-    };
-  });
-}, 10000); // every 10 seconds
+  updateCatalogPrices().catch(err => console.error('Error in periodic catalog update:', err));
+}, 30000);
 
 interface DatabaseSchema {
   settings: {
@@ -1056,14 +1149,53 @@ app.get('/api/auth/google/callback', async (req, res) => {
 
 // Endpoints
 
-// 1. Instruments Catalogue Search
-app.get('/api/instruments', (req, res) => {
-  const query = (req.query.q || '').toString().toLowerCase();
+// 1. Instruments Catalogue Search (with Real-time Pricing)
+app.get('/api/instruments', async (req, res) => {
+  const query = (req.query.q || '').toString().trim().toUpperCase();
   if (!query) {
     return res.json(instruments);
   }
+
+  // 1. Check if the query is an exact match for a symbol we already have
+  const matched = instruments.find(i => i.symbol === query);
+  if (matched) {
+    try {
+      const details = await fetchInstrumentDetails(matched.symbol);
+      if (details) {
+        matched.price = details.price;
+        if (details.name && !matched.name.includes('Stock')) {
+          matched.name = details.name;
+        }
+      }
+    } catch (e) {
+      console.error(`Error updating matched item ${matched.symbol}:`, e);
+    }
+    return res.json([matched]);
+  }
+
+  // 2. If not an exact match but the query fits general length constraints, fetch in real-time
+  if (query.length >= 2 && query.length <= 12) {
+    try {
+      const details = await fetchInstrumentDetails(query);
+      if (details) {
+        const dynamicInstrument: EToroInstrument = {
+          id: Math.floor(100000 + Math.random() * 900000),
+          symbol: details.symbol,
+          name: details.name,
+          type: details.type,
+          price: details.price
+        };
+        instruments.push(dynamicInstrument);
+        return res.json([dynamicInstrument]);
+      }
+    } catch (e) {
+      console.error(`Error fetching dynamic details for ${query}:`, e);
+    }
+  }
+
+  // 3. Fallback: text search on the current catalog
   const filtered = instruments.filter(
-    i => i.symbol.toLowerCase().includes(query) || i.name.toLowerCase().includes(query)
+    i => i.symbol.toUpperCase().includes(query) || i.name.toUpperCase().includes(query)
   );
   res.json(filtered);
 });
