@@ -17,8 +17,8 @@ const PORT = 3000;
 
 app.use(express.json());
 
-// Firebase initialization
-const firebaseConfig = {
+// Load Firebase configuration
+let firebaseConfig = {
   apiKey: process.env.VITE_FIREBASE_API_KEY || "AIzaSyAP6t5SW7pIAgEQ2dlKh67nee6khUxKaXk",
   authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || "tradingbotmanager75.firebaseapp.com",
   projectId: process.env.VITE_FIREBASE_PROJECT_ID || "tradingbotmanager75",
@@ -26,9 +26,35 @@ const firebaseConfig = {
   messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "327545877828",
   appId: process.env.VITE_FIREBASE_APP_ID || "1:327545877828:web:8bd3256427f412977a1311"
 };
+let firebaseDatabaseId: string | undefined = undefined;
+
+try {
+  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    firebaseConfig = {
+      apiKey: config.apiKey || firebaseConfig.apiKey,
+      authDomain: config.authDomain || firebaseConfig.authDomain,
+      projectId: config.projectId || firebaseConfig.projectId,
+      storageBucket: config.storageBucket || firebaseConfig.storageBucket,
+      messagingSenderId: config.messagingSenderId || firebaseConfig.messagingSenderId,
+      appId: config.appId || firebaseConfig.appId
+    };
+    if (config.firestoreDatabaseId) {
+      firebaseDatabaseId = config.firestoreDatabaseId;
+    }
+  }
+} catch (e) {
+  console.error("Error loading firebase-applet-config.json in server.ts:", e);
+}
 
 const firebaseApp = initializeApp(firebaseConfig);
-const firestoreDb = getFirestore(firebaseApp);
+export const firestoreDb = firebaseDatabaseId ? getFirestore(firebaseApp, firebaseDatabaseId) : getFirestore(firebaseApp);
+
+export {
+  doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc,
+  collection, query, where, addDoc, getFirestore
+};
 
 // Global instruments catalogue (simulated eToro)
 let instruments: EToroInstrument[] = [
@@ -43,10 +69,95 @@ let instruments: EToroInstrument[] = [
 ];
 
 
-// Helper function to fetch real-time instrument details from public financial APIs
-async function fetchInstrumentDetails(symbol: string): Promise<{ symbol: string; name: string; type: 'crypto' | 'stock' | 'forex'; price: number } | null> {
+// Helper function to query eToro Public API using route definitions from eToro MCP
+async function fetchEToroRealPrice(symbol: string, apiKey: string, userKey: string): Promise<{ symbol: string; name: string; type: 'crypto' | 'stock' | 'forex'; price: number } | null> {
+  try {
+    const requestId = crypto.randomUUID();
+    // 1. Search for instrument to resolve its instrument ID
+    const searchUrl = `https://public-api.etoro.com/api/v1/market-data/search?query=${encodeURIComponent(symbol)}`;
+    const searchRes = await fetch(searchUrl, {
+      headers: {
+        'x-api-key': apiKey,
+        'x-user-key': userKey,
+        'x-request-id': requestId,
+        'User-Agent': 'Mozilla/5.0'
+      }
+    });
+    if (!searchRes.ok) {
+      return null;
+    }
+    const searchData: any = await searchRes.json();
+    // Match exact symbol or fallback to first search result
+    const instrumentsList = searchData?.instruments || searchData;
+    const found = Array.isArray(instrumentsList) 
+      ? (instrumentsList.find((i: any) => i.symbol?.toUpperCase() === symbol.toUpperCase()) || instrumentsList[0])
+      : null;
+    
+    if (!found) {
+      return null;
+    }
+    
+    const instrumentId = found.instrumentId || found.instrumentID;
+    if (!instrumentId) return null;
+
+    // 2. Fetch live rates using resolved instrument ID
+    const ratesUrl = `https://public-api.etoro.com/api/v1/market-data/instruments/rates?instrumentIds=${instrumentId}`;
+    const ratesRes = await fetch(ratesUrl, {
+      headers: {
+        'x-api-key': apiKey,
+        'x-user-key': userKey,
+        'x-request-id': crypto.randomUUID(),
+        'User-Agent': 'Mozilla/5.0'
+      }
+    });
+    if (!ratesRes.ok) {
+      return null;
+    }
+    const ratesData: any = await ratesRes.json();
+    const ratesList = ratesData?.rates || ratesData;
+    const rate = Array.isArray(ratesList) 
+      ? ratesList.find((r: any) => r.instrumentID === instrumentId || r.instrumentId === instrumentId)
+      : null;
+    
+    if (rate) {
+      const price = rate.lastExecution || rate.ask || rate.bid || 0;
+      if (price > 0) {
+        const rawType = (found.type || found.instrumentType || '').toLowerCase();
+        const type: 'crypto' | 'stock' | 'forex' = rawType.includes('crypto') 
+          ? 'crypto' 
+          : (rawType.includes('forex') || rawType.includes('currencies') ? 'forex' : 'stock');
+        return {
+          symbol: symbol.toUpperCase(),
+          name: found.name || found.companyName || `${symbol} (via eToro)`,
+          type,
+          price
+        };
+      }
+    }
+  } catch (err) {
+    // Graceful fallback on network or parsing error
+  }
+  return null;
+}
+
+// Helper function to fetch real-time instrument details with eToro preference and graceful public fallback
+async function fetchInstrumentDetails(symbol: string, apiKey?: string, userKey?: string): Promise<{ symbol: string; name: string; type: 'crypto' | 'stock' | 'forex'; price: number } | null> {
   const query = symbol.trim().toUpperCase();
   if (!query) return null;
+
+  // Attempt eToro Public API first if credentials are provided and don't match the default mock values
+  const hasValidEToroCreds = apiKey && userKey && apiKey !== "et_live_8f391b0cc48123da760e" && userKey !== "usr_stefan_trader_99";
+  if (hasValidEToroCreds) {
+    console.log(`[eToro API] Attempting lookup for ${query}...`);
+    const etoroDetails = await fetchEToroRealPrice(query, apiKey!, userKey!);
+    if (etoroDetails) {
+      console.log(`[eToro API] Retrieved ${query} price: ${etoroDetails.price}`);
+      return etoroDetails;
+    }
+    console.log(`[eToro API] Using public endpoint fallback for ${query}`);
+  } else {
+    console.log(`[Pricing] Fetching ${query} from public endpoint...`);
+  }
 
   const isCrypto = query.endsWith('USD') || ['BTC', 'ETH', 'SOL', 'ADA', 'XRP', 'DOGE', 'LINK', 'DOT', 'UNI', 'AVAX', 'MATIC'].includes(query);
   const isForex = query.length === 6 && !query.includes('USD') && !isCrypto;
@@ -117,7 +228,7 @@ async function fetchInstrumentDetails(symbol: string): Promise<{ symbol: string;
       }
     }
   } catch (err) {
-    console.error(`Error fetching real price for ${symbol}:`, err);
+    console.error(`Error fetching fallback price for ${symbol}:`, err);
   }
   return null;
 }
@@ -125,9 +236,25 @@ async function fetchInstrumentDetails(symbol: string): Promise<{ symbol: string;
 // Periodically update existing catalogue prices from live APIs
 async function updateCatalogPrices() {
   console.log('[Catalog] Updating real-time catalog prices from live APIs...');
+  let apiKey: string | undefined;
+  let userKey: string | undefined;
+  try {
+    const settingsSnap = await getDocs(collection(firestoreDb, 'settings'));
+    for (const d of settingsSnap.docs) {
+      const data = d.data();
+      if (data.eToroCoupled && data.apiKey && data.userKey) {
+        apiKey = data.apiKey;
+        userKey = data.userKey;
+        break;
+      }
+    }
+  } catch (err) {
+    console.error('Error loading settings for catalog price update:', err);
+  }
+
   for (const inst of instruments) {
     try {
-      const details = await fetchInstrumentDetails(inst.symbol);
+      const details = await fetchInstrumentDetails(inst.symbol, apiKey, userKey);
       if (details) {
         inst.price = details.price;
         if (details.name && !inst.name.includes('Stock')) {
@@ -1152,6 +1279,24 @@ app.get('/api/auth/google/callback', async (req, res) => {
 // 1. Instruments Catalogue Search (with Real-time Pricing)
 app.get('/api/instruments', async (req, res) => {
   const query = (req.query.q || '').toString().trim().toUpperCase();
+
+  // Load user credentials from Settings if configured
+  let apiKey: string | undefined;
+  let userKey: string | undefined;
+  try {
+    const userId = getUserId(req);
+    const settingsDoc = await getDoc(doc(firestoreDb, 'settings', userId));
+    if (settingsDoc.exists()) {
+      const data = settingsDoc.data();
+      if (data.eToroCoupled) {
+        apiKey = data.apiKey;
+        userKey = data.userKey;
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching settings for instruments route:', err);
+  }
+
   if (!query) {
     return res.json(instruments);
   }
@@ -1160,7 +1305,7 @@ app.get('/api/instruments', async (req, res) => {
   const matched = instruments.find(i => i.symbol === query);
   if (matched) {
     try {
-      const details = await fetchInstrumentDetails(matched.symbol);
+      const details = await fetchInstrumentDetails(matched.symbol, apiKey, userKey);
       if (details) {
         matched.price = details.price;
         if (details.name && !matched.name.includes('Stock')) {
@@ -1176,7 +1321,7 @@ app.get('/api/instruments', async (req, res) => {
   // 2. If not an exact match but the query fits general length constraints, fetch in real-time
   if (query.length >= 2 && query.length <= 12) {
     try {
-      const details = await fetchInstrumentDetails(query);
+      const details = await fetchInstrumentDetails(query, apiKey, userKey);
       if (details) {
         const dynamicInstrument: EToroInstrument = {
           id: Math.floor(100000 + Math.random() * 900000),
@@ -1198,6 +1343,55 @@ app.get('/api/instruments', async (req, res) => {
     i => i.symbol.toUpperCase().includes(query) || i.name.toUpperCase().includes(query)
   );
   res.json(filtered);
+});
+
+// Endpoint to fetch dynamic status and tools catalog from eToro MCP server
+app.get('/api/etoro/mcp-status', async (req, res) => {
+  try {
+    const mcpResponse = await fetch('https://mcp.public-api.etoro.com/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'tools/call',
+        params: { name: 'get-all-routes', arguments: {} },
+        id: 1
+      })
+    });
+    
+    if (!mcpResponse.ok) {
+      throw new Error(`eToro MCP server returned status ${mcpResponse.status}`);
+    }
+    
+    const text = await mcpResponse.text();
+    let jsonStr = '';
+    const lines = text.split('\n');
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        jsonStr += line.substring(6).trim();
+      }
+    }
+    
+    const data = JSON.parse(jsonStr);
+    const mcpText = data.result.content[0].text;
+    const parsed = JSON.parse(mcpText);
+    
+    res.json({
+      status: 'connected',
+      url: 'https://mcp.public-api.etoro.com',
+      baseUrl: parsed.baseUrl || 'https://public-api.etoro.com',
+      apiTitle: parsed.apiTitle || 'eToro Public API',
+      apiVersion: parsed.apiVersion || 'unknown',
+      skillVersion: parsed.skillVersion || 'unknown',
+      routes: parsed.routes || {}
+    });
+  } catch (error: any) {
+    res.json({
+      status: 'error',
+      url: 'https://mcp.public-api.etoro.com',
+      message: error.message
+    });
+  }
 });
 
 // Get user eToro settings
@@ -1911,25 +2105,23 @@ app.post('/api/test/fire-webhook', async (req, res) => {
       timestamp: new Date().toISOString()
     };
 
-    const resMock: any = {
-      statusCode: 200,
-      status: (code: number) => {
-        resMock.statusCode = code;
-        return resMock;
-      },
-      json: (data: any) => {
-        if (resMock.statusCode >= 400) {
-          res.status(resMock.statusCode).json({ error: data.error || 'Webhook failed to process' });
-        } else {
-          res.json({ success: true, payload, response: data });
-        }
+    // Send real POST request to the webhook endpoint using fetch
+    try {
+      const response = await fetch(`http://localhost:${PORT}/api/webhooks/tv/${botId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        return res.status(response.status).json({ error: data.error || 'Webhook failed to process' });
       }
-    };
-
-    // Trigger router manually or run the post handler logic directly
-    return app._router.handle({ method: 'POST', url: `/api/webhooks/tv/${botId}`, body: payload, headers: {} }, resMock, (err: any) => {
-      res.status(500).json({ error: 'Vite middleware routing error' });
-    });
+      return res.json({ success: true, payload, response: data });
+    } catch (fetchErr: any) {
+      return res.status(500).json({ error: `Failed to invoke webhook locally: ${fetchErr.message}` });
+    }
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

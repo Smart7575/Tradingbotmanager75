@@ -49,6 +49,16 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
       console.error('Google Sign-In Error:', e);
       if (e.code === 'auth/popup-blocked') {
         setError('Popup geblokkeerd! Sta popups toe voor deze website om in te loggen met Google.');
+      } else if (e.code === 'auth/unauthorized-domain') {
+        setError(
+          '🔒 Google Sign-In is nog niet geautoriseerd voor dit domein in Firebase!\n\n' +
+          'Om dit op te lossen in uw Firebase Project:\n' +
+          '1. Ga naar de Firebase Console (console.firebase.google.com)\n' +
+          '2. Ga naar Authentication > Instellingen (Settings) > Geautoriseerde domeinen (Authorized domains)\n' +
+          '3. Klik op "Domein toevoegen" en voeg dit domein toe:\n' +
+          '   ' + window.location.hostname + '\n\n' +
+          '💡 Snelle oplossing: Klik hieronder op "Direct inloggen met Demo Account" of vul hierboven een e-mail en wachtwoord in om direct in te loggen zonder Google Auth.'
+        );
       } else {
         setError(e.message || 'Fout bij het inloggen met Google.');
       }
@@ -212,7 +222,7 @@ export default function AuthScreen({ onLoginSuccess }: AuthScreenProps) {
 
           {/* Feedback Messages */}
           {error && (
-            <div className="mb-6 p-3 bg-red-500/10 border border-red-500/25 text-red-400 text-xs rounded-lg text-center font-medium">
+            <div className="mb-6 p-4 bg-red-500/10 border border-red-500/25 text-red-400 text-xs rounded-xl text-left font-medium whitespace-pre-line leading-relaxed shadow-inner">
               {error}
             </div>
           )}
