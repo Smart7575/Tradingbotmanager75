@@ -3,6 +3,17 @@ import { Strategy, EToroInstrument } from '../types';
 import { Search, Info, ShieldAlert, CheckCircle, ArrowRight, ArrowLeft, Plus, Trash2, Wallet, Layers, Sliders, AlertTriangle } from 'lucide-react';
 import { apiFetch } from '../lib/api';
 
+const DEFAULT_INSTRUMENTS: EToroInstrument[] = [
+  { id: 1, symbol: 'BTCUSD', name: 'Bitcoin / USD', type: 'crypto', price: 65230.50 },
+  { id: 2, symbol: 'ETHUSD', name: 'Ethereum / USD', type: 'crypto', price: 3450.20 },
+  { id: 3, symbol: 'AAPL', name: 'Apple Inc. Common Stock', type: 'stock', price: 191.25 },
+  { id: 4, symbol: 'TSLA', name: 'Tesla Inc. Common Stock', type: 'stock', price: 248.80 },
+  { id: 5, symbol: 'NVDA', name: 'NVIDIA Corporation', type: 'stock', price: 482.40 },
+  { id: 6, symbol: 'MSFT', name: 'Microsoft Corporation', type: 'stock', price: 421.10 },
+  { id: 7, symbol: 'EURUSD', name: 'Euro / US Dollar', type: 'forex', price: 1.0865 },
+  { id: 8, symbol: 'SOLUSD', name: 'Solana / USD', type: 'crypto', price: 142.15 },
+];
+
 interface BotWizardProps {
   strategies: Strategy[];
   onBotCreated: (botId: string, webhookToken: string) => void;
@@ -53,12 +64,38 @@ export default function BotWizard({ strategies, onBotCreated, onCancel }: BotWiz
 
   // Load search catalog or fetch initially
   useEffect(() => {
+    let active = true;
     apiFetch(`/api/instruments?q=${encodeURIComponent(searchQuery)}`)
-      .then(r => r.json())
-      .then(data => {
-        setCatalogInstruments(data);
+      .then(async r => {
+        if (!r.ok) throw new Error('API request failed');
+        const contentType = r.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Not JSON');
+        }
+        return r.json();
       })
-      .catch(() => {});
+      .then(data => {
+        if (active) {
+          setCatalogInstruments(data);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          // Fallback to local filtering of default instruments
+          const query = searchQuery.toLowerCase().trim();
+          if (!query) {
+            setCatalogInstruments(DEFAULT_INSTRUMENTS);
+          } else {
+            const filtered = DEFAULT_INSTRUMENTS.filter(
+              inst => inst.symbol.toLowerCase().includes(query) || inst.name.toLowerCase().includes(query)
+            );
+            setCatalogInstruments(filtered);
+          }
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, [searchQuery]);
 
   // Calculations for step 2
